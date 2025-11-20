@@ -66,6 +66,10 @@ def run_game_physics() -> None:
         time.sleep(1/60)  # Run at 60 FPS like the client
         
         with game_lock:
+            # Check if game is over (someone reached 5 points)
+            if game_state["left_score"] >= 5 or game_state["right_score"] >= 5:
+                # Don't update ball physics if game is over
+                continue
             # Update ball position
             game_state["ball_x"] += game_state["ball_xvel"]
             game_state["ball_y"] += game_state["ball_yvel"]

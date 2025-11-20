@@ -25,7 +25,8 @@ received_state = {
     "ball_yvel": 0,
     "left_score": 0,
     "right_score": 0,
-    "sync": 0
+    "sync": 0,
+    "player_side": None  # Will be set to "left" or "right"
 }
 state_lock = threading.Lock()
 
