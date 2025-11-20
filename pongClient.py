@@ -1,4 +1,27 @@
 # =================================================================================================
+# Author: Instructor
+# Purpose: Reset game state for a new game
+# Pre: None
+# Post: Game state is reset to initial values
+# =================================================================================================
+def reset_game() -> None:
+    """
+    Reset the game state when starting a new game
+    """
+    with game_lock:
+        game_state["left_paddle_y"] = 215
+        game_state["right_paddle_y"] = 215
+        game_state["ball_x"] = 320.0
+        game_state["ball_y"] = 240.0
+        game_state["ball_xvel"] = -5.0
+        game_state["ball_yvel"] = 0.0
+        game_state["left_score"] = 0
+        game_state["right_score"] = 0
+        game_state["sync"] = 0
+    print("[RESET] Game state reset for new game")
+
+
+# =================================================================================================
 # Contributing Authors:	    Student Implementation
 # Email Addresses:          student@uky.edu
 # Date:                     November 2025
@@ -251,44 +274,57 @@ def start_server(host: str = "0.0.0.0", port: int = 5000) -> None:
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind((host, port))
-    server_socket.listen(2)
+    server_socket.listen(5)  # Allow queue of connections
     
     print(f"[STARTING] Server starting on {host}:{port}")
-    print(f"[LISTENING] Waiting for 2 players to connect...")
+    print(f"[LISTENING] Waiting for players to connect...")
     
-    # Accept first client (left paddle)
-    client_socket, address = server_socket.accept()
-    with clients_lock:
-        clients["left"] = client_socket
-    
-    thread = threading.Thread(target=handle_client, args=(client_socket, "left", address))
-    thread.daemon = True
-    thread.start()
-    
-    print(f"[CONNECTED] 1/2 players connected (left paddle)")
-    
-    # Accept second client (right paddle)
-    client_socket, address = server_socket.accept()
-    with clients_lock:
-        clients["right"] = client_socket
-    
-    thread = threading.Thread(target=handle_client, args=(client_socket, "right", address))
-    thread.daemon = True
-    thread.start()
-    
-    print(f"[CONNECTED] 2/2 players connected (right paddle)")
-    print(f"[GAME STARTED] Both players connected! Starting game physics...")
-    
-    # Start the game physics thread
+    # Start the game physics thread (runs continuously)
     game_running = True
     physics_thread = threading.Thread(target=run_game_physics)
     physics_thread.daemon = True
     physics_thread.start()
     
-    # Keep server running
+    # Continuously accept new connections
     try:
         while True:
-            time.sleep(1)
+            client_socket, address = server_socket.accept()
+            
+            # Determine which paddle to assign
+            with clients_lock:
+                if "left" not in clients:
+                    player_side = "left"
+                    clients["left"] = client_socket
+                elif "right" not in clients:
+                    player_side = "right"
+                    clients["right"] = client_socket
+                else:
+                    # Both slots full, reject this connection
+                    print(f"[REJECTED] Connection from {address} - game is full")
+                    try:
+                        error_msg = json.dumps({"error": "Game is full"}) + "\n"
+                        client_socket.send(error_msg.encode())
+                    except:
+                        pass
+                    client_socket.close()
+                    continue
+            
+            # Create thread for this player
+            thread = threading.Thread(target=handle_client, args=(client_socket, player_side, address))
+            thread.daemon = True
+            thread.start()
+            
+            print(f"[CONNECTED] {address} connected as {player_side} paddle")
+            
+            # Check if we now have 2 players
+            with clients_lock:
+                num_players = len(clients)
+            
+            if num_players == 2:
+                print(f"[GAME READY] Both players connected! Game is live.")
+            else:
+                print(f"[WAITING] {num_players}/2 players connected. Waiting for opponent...")
+                
     except KeyboardInterrupt:
         print("\n[SHUTDOWN] Server shutting down...")
         game_running = False
