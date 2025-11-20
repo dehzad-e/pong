@@ -74,6 +74,8 @@ def receive_from_server(client: socket.socket) -> None:
                         received_state["left_score"] = server_data.get("left_score", 0)
                         received_state["right_score"] = server_data.get("right_score", 0)
                         received_state["sync"] = server_data.get("sync", 0)
+                        if "player_side" in server_data:
+                            received_state["player_side"] = server_data["player_side"]
                         
                 except json.JSONDecodeError:
                     print(f"[ERROR] Invalid JSON received: {line}")
@@ -136,6 +138,9 @@ def playGame(screenWidth: int, screenHeight: int, playerPaddle: str, client: soc
     # Track previous score for sound effects
     prev_left_score = 0
     prev_right_score = 0
+    
+    # Interpolation for opponent paddle (smooth movement)
+    opponent_target_y = opponentPaddleObj.rect.y
 
     while True:
         # Wiping the screen
@@ -156,7 +161,7 @@ def playGame(screenWidth: int, screenHeight: int, playerPaddle: str, client: soc
                 playerPaddleObj.moving = ""
 
         # =========================================================================================
-        # Update player paddle position locally (immediate response)
+        # Update player paddle position locally (immediate response - no server override)
         # =========================================================================================
         if playerPaddleObj.moving == "down":
             if playerPaddleObj.rect.bottomleft[1] < screenHeight - 10:
@@ -170,7 +175,7 @@ def playGame(screenWidth: int, screenHeight: int, playerPaddle: str, client: soc
         # =========================================================================================
         try:
             client_data = {
-                "paddle_y": playerPaddleObj.rect.y
+                "paddle_y": int(playerPaddleObj.rect.y)  # Send integer to avoid float precision issues
             }
             
             message = json.dumps(client_data) + "\n"
@@ -185,9 +190,13 @@ def playGame(screenWidth: int, screenHeight: int, playerPaddle: str, client: soc
         # NETWORKING: Apply AUTHORITATIVE state from server
         # =========================================================================================
         with state_lock:
-            # Update BOTH paddle positions from server (server knows both)
-            leftPaddle.rect.y = received_state["left_paddle_y"]
-            rightPaddle.rect.y = received_state["right_paddle_y"]
+            # Update opponent's paddle position (with smooth interpolation)
+            if playerPaddle == "left":
+                # We control left paddle locally, update right (opponent) from server
+                opponent_target_y = received_state["right_paddle_y"]
+            else:
+                # We control right paddle locally, update left (opponent) from server
+                opponent_target_y = received_state["left_paddle_y"]
             
             # Update ball position from server (server is authoritative)
             ball.rect.x = received_state["ball_x"]
@@ -204,6 +213,13 @@ def playGame(screenWidth: int, screenHeight: int, playerPaddle: str, client: soc
                 pointSound.play()
             prev_left_score = lScore
             prev_right_score = rScore
+        
+        # Smoothly interpolate opponent paddle to target position (reduces network jitter)
+        current_y = opponentPaddleObj.rect.y
+        diff = opponent_target_y - current_y
+        if abs(diff) > 2:  # Only update if difference is significant (dead zone)
+            # Move 40% of the way toward target each frame for smooth motion
+            opponentPaddleObj.rect.y = current_y + (diff * 0.4)
 
         # =========================================================================================
         # Display win message or game elements
