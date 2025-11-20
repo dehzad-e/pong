@@ -1,4 +1,27 @@
 # =================================================================================================
+# Author: Instructor
+# Purpose: Reset game state for a new game
+# Pre: None
+# Post: Game state is reset to initial values
+# =================================================================================================
+def reset_game() -> None:
+    """
+    Reset the game state when starting a new game
+    """
+    with game_lock:
+        game_state["left_paddle_y"] = 215
+        game_state["right_paddle_y"] = 215
+        game_state["ball_x"] = 320.0
+        game_state["ball_y"] = 240.0
+        game_state["ball_xvel"] = -5.0
+        game_state["ball_yvel"] = 0.0
+        game_state["left_score"] = 0
+        game_state["right_score"] = 0
+        game_state["sync"] = 0
+    print("[RESET] Game state reset for new game")
+
+
+# =================================================================================================
 # Contributing Authors:	    Student Implementation
 # Email Addresses:          student@uky.edu
 # Date:                     November 2025
@@ -64,6 +87,13 @@ def run_game_physics() -> None:
     
     while game_running:
         time.sleep(1/60)  # Run at 60 FPS like the client
+        
+        # Only run physics if we have 2 players connected
+        with clients_lock:
+            num_players = len(clients)
+        
+        if num_players < 2:
+            continue  # Skip physics calculation until 2 players are connected
         
         with game_lock:
             # Check if game is over (someone reached 5 points)
@@ -163,6 +193,8 @@ def handle_client(client_socket: socket.socket, player_side: str, address: tuple
     """
     print(f"[NEW CONNECTION] {address} connected as {player_side} paddle")
     
+    buffer = ""  # Buffer to accumulate partial messages
+    
     try:
         # Send initial game info to client
         initial_data = {
@@ -183,36 +215,45 @@ def handle_client(client_socket: socket.socket, player_side: str, address: tuple
                 print(f"[DISCONNECTED] {address} ({player_side} paddle)")
                 break
             
-            # Parse the JSON message from client
-            try:
-                client_data = json.loads(data.strip())
-            except json.JSONDecodeError:
-                print(f"[ERROR] Invalid JSON from {address}: {data}")
-                continue
+            # Add received data to buffer
+            buffer += data
             
-            # Update only the paddle position from this client
-            with game_lock:
-                if player_side == "left":
-                    game_state["left_paddle_y"] = client_data.get("paddle_y", game_state["left_paddle_y"])
-                else:
-                    game_state["right_paddle_y"] = client_data.get("paddle_y", game_state["right_paddle_y"])
+            # Process all complete messages in buffer (messages end with \n)
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
                 
-                # Prepare full game state to send back
-                response_data = {
-                    "left_paddle_y": game_state["left_paddle_y"],
-                    "right_paddle_y": game_state["right_paddle_y"],
-                    "ball_x": game_state["ball_x"],
-                    "ball_y": game_state["ball_y"],
-                    "ball_xvel": game_state["ball_xvel"],
-                    "ball_yvel": game_state["ball_yvel"],
-                    "left_score": game_state["left_score"],
-                    "right_score": game_state["right_score"],
-                    "sync": game_state["sync"]
-                }
-            
-            # Send updated game state back to client
-            response_message = json.dumps(response_data) + "\n"
-            client_socket.send(response_message.encode())
+                # Parse the JSON message from client
+                try:
+                    client_data = json.loads(line.strip())
+                except json.JSONDecodeError:
+                    print(f"[ERROR] Invalid JSON from {address}: {line}")
+                    continue
+                
+                # Update only the paddle position from this client
+                with game_lock:
+                    if player_side == "left":
+                        game_state["left_paddle_y"] = client_data.get("paddle_y", game_state["left_paddle_y"])
+                    else:
+                        game_state["right_paddle_y"] = client_data.get("paddle_y", game_state["right_paddle_y"])
+                    
+                    # Prepare full game state to send back
+                    # Send BOTH paddle positions so client knows both
+                    response_data = {
+                        "left_paddle_y": game_state["left_paddle_y"],
+                        "right_paddle_y": game_state["right_paddle_y"],
+                        "ball_x": game_state["ball_x"],
+                        "ball_y": game_state["ball_y"],
+                        "ball_xvel": game_state["ball_xvel"],
+                        "ball_yvel": game_state["ball_yvel"],
+                        "left_score": game_state["left_score"],
+                        "right_score": game_state["right_score"],
+                        "sync": game_state["sync"],
+                        "player_side": player_side  # Tell client which paddle is theirs
+                    }
+                
+                # Send updated game state back to client
+                response_message = json.dumps(response_data) + "\n"
+                client_socket.send(response_message.encode())
             
     except Exception as e:
         print(f"[ERROR] Exception with {address}: {e}")
@@ -240,44 +281,58 @@ def start_server(host: str = "0.0.0.0", port: int = 5000) -> None:
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind((host, port))
-    server_socket.listen(2)
+    server_socket.listen(5)  # Allow queue of connections
     
     print(f"[STARTING] Server starting on {host}:{port}")
-    print(f"[LISTENING] Waiting for 2 players to connect...")
+    print(f"[LISTENING] Waiting for players to connect...")
     
-    # Accept first client (left paddle)
-    client_socket, address = server_socket.accept()
-    with clients_lock:
-        clients["left"] = client_socket
-    
-    thread = threading.Thread(target=handle_client, args=(client_socket, "left", address))
-    thread.daemon = True
-    thread.start()
-    
-    print(f"[CONNECTED] 1/2 players connected (left paddle)")
-    
-    # Accept second client (right paddle)
-    client_socket, address = server_socket.accept()
-    with clients_lock:
-        clients["right"] = client_socket
-    
-    thread = threading.Thread(target=handle_client, args=(client_socket, "right", address))
-    thread.daemon = True
-    thread.start()
-    
-    print(f"[CONNECTED] 2/2 players connected (right paddle)")
-    print(f"[GAME STARTED] Both players connected! Starting game physics...")
-    
-    # Start the game physics thread
+    # Start the game physics thread (runs continuously)
     game_running = True
     physics_thread = threading.Thread(target=run_game_physics)
     physics_thread.daemon = True
     physics_thread.start()
     
-    # Keep server running
+    # Continuously accept new connections
     try:
         while True:
-            time.sleep(1)
+            client_socket, address = server_socket.accept()
+            
+            # Determine which paddle to assign
+            with clients_lock:
+                if "left" not in clients:
+                    player_side = "left"
+                    clients["left"] = client_socket
+                elif "right" not in clients:
+                    player_side = "right"
+                    clients["right"] = client_socket
+                else:
+                    # Both slots full, reject this connection
+                    print(f"[REJECTED] Connection from {address} - game is full")
+                    try:
+                        error_msg = json.dumps({"error": "Game is full"}) + "\n"
+                        client_socket.send(error_msg.encode())
+                    except:
+                        pass
+                    client_socket.close()
+                    continue
+            
+            # Create thread for this player
+            thread = threading.Thread(target=handle_client, args=(client_socket, player_side, address))
+            thread.daemon = True
+            thread.start()
+            
+            print(f"[CONNECTED] {address} connected as {player_side} paddle")
+            
+            # Check if we now have 2 players
+            with clients_lock:
+                num_players = len(clients)
+            
+            if num_players == 2:
+                print(f"[GAME READY] Both players connected! Resetting game...")
+                reset_game()  # Reset scores and ball position for new game
+            else:
+                print(f"[WAITING] {num_players}/2 players connected. Waiting for opponent...")
+                
     except KeyboardInterrupt:
         print("\n[SHUTDOWN] Server shutting down...")
         game_running = False
