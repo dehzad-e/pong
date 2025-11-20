@@ -3,7 +3,7 @@
 # Email Addresses:          student@uky.edu
 # Date:                     November 2025
 # Purpose:                  Client for multiplayer Pong game - connects to server and plays game
-# Misc:                     Integrates socket communication with Pygame rendering
+# Misc:                     Client only renders; server is authoritative for all game logic
 # =================================================================================================
 
 import pygame
@@ -17,7 +17,8 @@ from assets.code.helperCode import *
 
 # Global variable to store received game state from server
 received_state = {
-    "opponent_paddle_y": 215,
+    "left_paddle_y": 215,
+    "right_paddle_y": 215,
     "ball_x": 320,
     "ball_y": 240,
     "ball_xvel": -5,
@@ -33,30 +34,25 @@ state_lock = threading.Lock()
 # Author: Instructor
 # Purpose: Background thread to continuously receive updates from server
 # Pre: client is a connected socket
-# Post: Updates received_state with data from server
+# Post: Updates received_state with authoritative data from server
 # =================================================================================================
 def receive_from_server(client: socket.socket) -> None:
     """
     This function runs in a background thread.
-    It continuously listens for messages from the server and updates received_state.
-    
-    Why a separate thread? 
-    - The main game loop (playGame) needs to run at 60 FPS without blocking
-    - Network recv() is blocking, so we handle it in a separate thread
+    It continuously listens for the AUTHORITATIVE game state from the server.
+    The client never calculates game logic - only renders what server sends.
     """
     global received_state
-    buffer = ""  # Buffer to accumulate partial messages
+    buffer = ""
     
     try:
         while True:
-            # Receive data from server
             data = client.recv(1024).decode()
             
             if not data:
                 print("[DISCONNECTED] Lost connection to server")
                 break
             
-            # Add to buffer (messages are delimited by newlines)
             buffer += data
             
             # Process all complete messages in buffer
@@ -66,9 +62,10 @@ def receive_from_server(client: socket.socket) -> None:
                 try:
                     server_data = json.loads(line)
                     
-                    # Update the shared state (thread-safe)
+                    # Update the shared state with server's authoritative data
                     with state_lock:
-                        received_state["opponent_paddle_y"] = server_data.get("opponent_paddle_y", received_state["opponent_paddle_y"])
+                        received_state["left_paddle_y"] = server_data.get("left_paddle_y", received_state["left_paddle_y"])
+                        received_state["right_paddle_y"] = server_data.get("right_paddle_y", received_state["right_paddle_y"])
                         received_state["ball_x"] = server_data.get("ball_x", received_state["ball_x"])
                         received_state["ball_y"] = server_data.get("ball_y", received_state["ball_y"])
                         received_state["ball_xvel"] = server_data.get("ball_xvel", received_state["ball_xvel"])
@@ -86,7 +83,7 @@ def receive_from_server(client: socket.socket) -> None:
 
 # =================================================================================================
 # Author: Original + Instructor modifications
-# Purpose: Main game loop with networking integrated
+# Purpose: Main game loop - CLIENT ONLY RENDERS, does not calculate game logic
 # Pre: screenWidth, screenHeight, playerPaddle ("left"/"right"), and client socket are provided
 # Post: Game runs until someone wins or window is closed
 # =================================================================================================
@@ -120,8 +117,10 @@ def playGame(screenWidth: int, screenHeight: int, playerPaddle: str, client: soc
     leftPaddle = Paddle(pygame.Rect(10, paddleStartPosY, paddleWidth, paddleHeight))
     rightPaddle = Paddle(pygame.Rect(screenWidth - 20, paddleStartPosY, paddleWidth, paddleHeight))
 
+    # Ball object (position will be overridden by server)
     ball = Ball(pygame.Rect(screenWidth / 2, screenHeight / 2, 5, 5), -5, 0)
 
+    # Determine which paddle is controlled by this player
     if playerPaddle == "left":
         opponentPaddleObj = rightPaddle
         playerPaddleObj = leftPaddle
@@ -129,13 +128,13 @@ def playGame(screenWidth: int, screenHeight: int, playerPaddle: str, client: soc
         opponentPaddleObj = leftPaddle
         playerPaddleObj = rightPaddle
 
-    lScore = 0
-    rScore = 0
-    sync = 0
-
     # Start background thread to receive server updates
     receive_thread = threading.Thread(target=receive_from_server, args=(client,), daemon=True)
     receive_thread.start()
+    
+    # Track previous score for sound effects
+    prev_left_score = 0
+    prev_right_score = 0
 
     while True:
         # Wiping the screen
@@ -156,22 +155,23 @@ def playGame(screenWidth: int, screenHeight: int, playerPaddle: str, client: soc
                 playerPaddleObj.moving = ""
 
         # =========================================================================================
-        # NETWORKING: Send update to server
+        # Update player paddle position locally (immediate response)
+        # =========================================================================================
+        if playerPaddleObj.moving == "down":
+            if playerPaddleObj.rect.bottomleft[1] < screenHeight - 10:
+                playerPaddleObj.rect.y += playerPaddleObj.speed
+        elif playerPaddleObj.moving == "up":
+            if playerPaddleObj.rect.topleft[1] > 10:
+                playerPaddleObj.rect.y -= playerPaddleObj.speed
+
+        # =========================================================================================
+        # NETWORKING: Send our paddle position to server
         # =========================================================================================
         try:
-            # Prepare data to send to server
             client_data = {
-                "paddle_y": playerPaddleObj.rect.y,
-                "sync": sync,
-                "ball_x": ball.rect.x,
-                "ball_y": ball.rect.y,
-                "ball_xvel": ball.xVel,
-                "ball_yvel": ball.yVel,
-                "left_score": lScore,
-                "right_score": rScore
+                "paddle_y": playerPaddleObj.rect.y
             }
             
-            # Send as JSON with newline delimiter
             message = json.dumps(client_data) + "\n"
             client.send(message.encode())
             
@@ -181,11 +181,12 @@ def playGame(screenWidth: int, screenHeight: int, playerPaddle: str, client: soc
             sys.exit()
         
         # =========================================================================================
-        # NETWORKING: Apply received state from server
+        # NETWORKING: Apply AUTHORITATIVE state from server
         # =========================================================================================
         with state_lock:
-            # Update opponent paddle position from server
-            opponentPaddleObj.rect.y = received_state["opponent_paddle_y"]
+            # Update BOTH paddle positions from server (server knows both)
+            leftPaddle.rect.y = received_state["left_paddle_y"]
+            rightPaddle.rect.y = received_state["right_paddle_y"]
             
             # Update ball position from server (server is authoritative)
             ball.rect.x = received_state["ball_x"]
@@ -196,63 +197,37 @@ def playGame(screenWidth: int, screenHeight: int, playerPaddle: str, client: soc
             # Update scores from server
             lScore = received_state["left_score"]
             rScore = received_state["right_score"]
+            
+            # Play sound effects when score changes
+            if lScore > prev_left_score or rScore > prev_right_score:
+                pointSound.play()
+            prev_left_score = lScore
+            prev_right_score = rScore
 
         # =========================================================================================
-        # Update the player paddle location on the screen
-        # =========================================================================================
-        if playerPaddleObj.moving == "down":
-            if playerPaddleObj.rect.bottomleft[1] < screenHeight - 10:
-                playerPaddleObj.rect.y += playerPaddleObj.speed
-        elif playerPaddleObj.moving == "up":
-            if playerPaddleObj.rect.topleft[1] > 10:
-                playerPaddleObj.rect.y -= playerPaddleObj.speed
-
-        # =========================================================================================
-        # If the game is over, display the win message
+        # Display win message or game elements
         # =========================================================================================
         if lScore > 4 or rScore > 4:
-            winText = "Player 1 Wins! " if lScore > 4 else "Player 2 Wins! "
+            # Determine win message based on player's perspective
+            if playerPaddle == "left":
+                winText = "You Win!" if lScore > 4 else "Opponent Wins!"
+            else:
+                winText = "You Win!" if rScore > 4 else "Opponent Wins!"
+            
             textSurface = winFont.render(winText, False, WHITE, (0, 0, 0))
             textRect = textSurface.get_rect()
             textRect.center = ((screenWidth / 2), screenHeight / 2)
             winMessage = screen.blit(textSurface, textRect)
         else:
-            # ==== Ball Logic =====================================================================
-            # Note: Ball physics are calculated locally but overridden by server updates
-            ball.updatePos()
-
-            # If the ball makes it past the edge of the screen, update score
-            if ball.rect.x > screenWidth:
-                lScore += 1
-                pointSound.play()
-                ball.reset(nowGoing="left")
-            elif ball.rect.x < 0:
-                rScore += 1
-                pointSound.play()
-                ball.reset(nowGoing="right")
-
-            # If the ball hits a paddle
-            if ball.rect.colliderect(playerPaddleObj.rect):
-                bounceSound.play()
-                ball.hitPaddle(playerPaddleObj.rect.center[1])
-            elif ball.rect.colliderect(opponentPaddleObj.rect):
-                bounceSound.play()
-                ball.hitPaddle(opponentPaddleObj.rect.center[1])
-
-            # If the ball hits a wall
-            if ball.rect.colliderect(topWall) or ball.rect.colliderect(bottomWall):
-                bounceSound.play()
-                ball.hitWall()
-
+            # Draw the ball
             pygame.draw.rect(screen, WHITE, ball)
-            # ==== End Ball Logic =================================================================
 
         # Drawing the dotted line in the center
         for i in centerLine:
             pygame.draw.rect(screen, WHITE, i)
 
         # Drawing the paddles
-        for paddle in [playerPaddleObj, opponentPaddleObj]:
+        for paddle in [leftPaddle, rightPaddle]:
             pygame.draw.rect(screen, WHITE, paddle)
 
         pygame.draw.rect(screen, WHITE, topWall)
@@ -260,8 +235,6 @@ def playGame(screenWidth: int, screenHeight: int, playerPaddle: str, client: soc
         scoreRect = updateScore(lScore, rScore, screen, WHITE, scoreFont)
         pygame.display.update([topWall, bottomWall, ball, leftPaddle, rightPaddle, scoreRect, winMessage])
         clock.tick(60)
-
-        sync += 1
 
 
 # =================================================================================================
@@ -276,7 +249,6 @@ def joinServer(ip: str, port: str, errorLabel: tk.Label, app: tk.Tk) -> None:
     It connects to the server, receives initial configuration, then starts the game.
     """
     
-    # Validate inputs
     if not ip or not port:
         errorLabel.config(text="Please enter both IP and Port")
         errorLabel.update()
@@ -289,21 +261,18 @@ def joinServer(ip: str, port: str, errorLabel: tk.Label, app: tk.Tk) -> None:
         errorLabel.update()
         return
     
-    # Create TCP socket
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     
     try:
         errorLabel.config(text=f"Connecting to {ip}:{port}...")
         errorLabel.update()
         
-        # Connect to server
         client.connect((ip, port_num))
         
         errorLabel.config(text="Connected! Waiting for game info...")
         errorLabel.update()
         
         # Receive initial configuration from server
-        # Server sends: screen_width, screen_height, player_paddle
         data = client.recv(1024).decode()
         
         if not data:
@@ -311,7 +280,6 @@ def joinServer(ip: str, port: str, errorLabel: tk.Label, app: tk.Tk) -> None:
             errorLabel.update()
             return
         
-        # Parse JSON response
         try:
             init_data = json.loads(data.strip())
             screenWidth = init_data["screen_width"]
@@ -321,10 +289,8 @@ def joinServer(ip: str, port: str, errorLabel: tk.Label, app: tk.Tk) -> None:
             errorLabel.config(text=f"Starting game as {playerPaddle} paddle...")
             errorLabel.update()
             
-            # Give user a moment to read the message
             app.after(1000)
             
-            # Close GUI and start game
             app.withdraw()
             playGame(screenWidth, screenHeight, playerPaddle, client)
             app.quit()
@@ -345,10 +311,6 @@ def joinServer(ip: str, port: str, errorLabel: tk.Label, app: tk.Tk) -> None:
         errorLabel.update()
 
 
-# =================================================================================================
-# Author: Original (unchanged)
-# Purpose: Display the initial GUI for entering server connection info
-# =================================================================================================
 def startScreen():
     app = tk.Tk()
     app.title("Server Info")
@@ -363,14 +325,14 @@ def startScreen():
 
     ipEntry = tk.Entry(app)
     ipEntry.grid(column=1, row=1)
-    ipEntry.insert(0, "127.0.0.1")  # Default to localhost
+    ipEntry.insert(0, "127.0.0.1")
 
     portLabel = tk.Label(text="Server Port:")
     portLabel.grid(column=0, row=2, sticky="W", padx=8)
 
     portEntry = tk.Entry(app)
     portEntry.grid(column=1, row=2)
-    portEntry.insert(0, "5000")  # Default port
+    portEntry.insert(0, "5000")
 
     errorLabel = tk.Label(text="")
     errorLabel.grid(column=0, row=4, columnspan=2)
@@ -383,6 +345,3 @@ def startScreen():
 
 if __name__ == "__main__":
     startScreen()
-    
-    # For testing without server, uncomment this:
-    # playGame(640, 480, "left", socket.socket(socket.AF_INET, socket.SOCK_STREAM))
