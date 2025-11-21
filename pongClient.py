@@ -84,7 +84,40 @@ def playGame(screenWidth:int, screenHeight:int, playerPaddle:str, client:socket.
         # where the ball is and the current score.
         # Feel free to change when the score is updated to suit your needs/requirements
         
-        
+        try:
+            # Format: paddleY,ballX,ballY,lScore,rScore,sync
+            msg = f"{playerPaddleObj.rect.y},{ball.rect.x},{ball.rect.y},{lScore},{rScore},{sync}"
+            client.send(msg.encode())
+            
+            # Receive update from server
+            # Format: oppPaddleY,ballX,ballY,lScore,rScore,sync
+            response = client.recv(1024).decode()
+            parts = response.split(',')
+            
+            if len(parts) == 6:
+                oppPaddleY = float(parts[0])
+                serverBallX = float(parts[1])
+                serverBallY = float(parts[2])
+                serverLScore = int(parts[3])
+                serverRScore = int(parts[4])
+                serverSync = int(parts[5])
+                
+                # Update opponent paddle
+                opponentPaddleObj.rect.y = oppPaddleY
+                
+                # Sync logic
+                if serverSync > sync:
+                    # We are behind, catch up
+                    ball.rect.x = serverBallX
+                    ball.rect.y = serverBallY
+                    lScore = serverLScore
+                    rScore = serverRScore
+                    sync = serverSync
+                    
+        except Exception as e:
+            print(f"Error communicating with server: {e}")
+            break
+            
         # =========================================================================================
 
         # Update the player paddle and opponent paddle's location on the screen
@@ -155,7 +188,7 @@ def playGame(screenWidth:int, screenHeight:int, playerPaddle:str, client:socket.
         # =========================================================================================
         # Send your server update here at the end of the game loop to sync your game with your
         # opponent's game
-
+        # (Implemented above in the loop)
         # =========================================================================================
 
 
@@ -175,20 +208,32 @@ def joinServer(ip:str, port:str, errorLabel:tk.Label, app:tk.Tk) -> None:
     
     # Create a socket and connect to the server
     # You don't have to use SOCK_STREAM, use what you think is best
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client.connect((ip, int(port)))
 
-    # Get the required information from your server (screen width, height & player paddle, "left or "right)
+        # Get the required information from your server (screen width, height & player paddle, "left or "right)
+        # Format: screenWidth,screenHeight,playerPaddle
+        data = client.recv(1024).decode()
+        parts = data.split(',')
+        
+        screenWidth = int(parts[0])
+        screenHeight = int(parts[1])
+        playerPaddle = parts[2]
 
+        # If you have messages you'd like to show the user use the errorLabel widget like so
+        errorLabel.config(text=f"Connected! Playing as {playerPaddle}")
+        # You may or may not need to call this, depending on how many times you update the label
+        errorLabel.update()     
 
-    # If you have messages you'd like to show the user use the errorLabel widget like so
-    errorLabel.config(text=f"Some update text. You input: IP: {ip}, Port: {port}")
-    # You may or may not need to call this, depending on how many times you update the label
-    errorLabel.update()     
-
-    # Close this window and start the game with the info passed to you from the server
-    #app.withdraw()     # Hides the window (we'll kill it later)
-    #playGame(screenWidth, screenHeight, ("left"|"right"), client)  # User will be either left or right paddle
-    #app.quit()         # Kills the window
+        # Close this window and start the game with the info passed to you from the server
+        app.withdraw()     # Hides the window (we'll kill it later)
+        playGame(screenWidth, screenHeight, playerPaddle, client)  # User will be either left or right paddle
+        app.quit()         # Kills the window
+        
+    except Exception as e:
+        errorLabel.config(text=f"Error: {e}")
+        errorLabel.update()
 
 
 # This displays the opening screen, you don't need to edit this (but may if you like)
@@ -222,9 +267,9 @@ def startScreen():
     app.mainloop()
 
 if __name__ == "__main__":
-    #startScreen()
+    startScreen()
     
     # Uncomment the line below if you want to play the game without a server to see how it should work
     # the startScreen() function should call playGame with the arguments given to it by the server this is
     # here for demo purposes only
-    playGame(640, 480,"left",socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+    # playGame(640, 480,"left",socket.socket(socket.AF_INET, socket.SOCK_STREAM))
