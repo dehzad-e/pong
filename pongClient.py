@@ -1,339 +1,230 @@
 # =================================================================================================
-# Author: Instructor
-# Purpose: Reset game state for a new game
-# Pre: None
-# Post: Game state is reset to initial values
-# =================================================================================================
-def reset_game() -> None:
-    """
-    Reset the game state when starting a new game
-    """
-    with game_lock:
-        game_state["left_paddle_y"] = 215
-        game_state["right_paddle_y"] = 215
-        game_state["ball_x"] = 320.0
-        game_state["ball_y"] = 240.0
-        game_state["ball_xvel"] = -5.0
-        game_state["ball_yvel"] = 0.0
-        game_state["left_score"] = 0
-        game_state["right_score"] = 0
-        game_state["sync"] = 0
-    print("[RESET] Game state reset for new game")
-
-
-# =================================================================================================
-# Contributing Authors:	    Student Implementation
-# Email Addresses:          student@uky.edu
-# Date:                     November 2025
-# Purpose:                  Server for multiplayer Pong game - handles two clients and manages game state
-# Misc:                     Server is authoritative for ball physics and scoring
+# Contributing Authors:	    <Anyone who touched the code>
+# Email Addresses:          <Your uky.edu email addresses>
+# Date:                     <The date the file was last edited>
+# Purpose:                  <How this file contributes to the project>
+# Misc:                     <Not Required.  Anything else you might want to include>
 # =================================================================================================
 
-import socket
-import threading
-import json
+import pygame
+import tkinter as tk
 import sys
-import time
+import socket
 
-# =================================================================================================
-# GLOBAL GAME STATE
-# Server is now AUTHORITATIVE for all ball physics and scoring
-# =================================================================================================
-game_state = {
-    "left_paddle_y": 215,      
-    "right_paddle_y": 215,     
-    "ball_x": 320.0,           
-    "ball_y": 240.0,           
-    "ball_xvel": -5.0,         
-    "ball_yvel": 0.0,          
-    "left_score": 0,           
-    "right_score": 0,          
-    "sync": 0                  
-}
+from assets.code.helperCode import *
 
-game_lock = threading.Lock()
-
-# Store connected clients
-clients = {}  # Changed to dict: {"left": socket, "right": socket}
-clients_lock = threading.Lock()
-
-# Screen dimensions
-SCREEN_WIDTH = 640
-SCREEN_HEIGHT = 480
-
-# Paddle dimensions (must match client)
-PADDLE_HEIGHT = 50
-PADDLE_WIDTH = 10
-
-# Game physics running flag
-game_running = False
-
-
-# =================================================================================================
-# Author: Instructor
-# Purpose: Server-side ball physics calculation (runs in separate thread)
-# Pre: Two clients must be connected
-# Post: Ball position updated 60 times per second
-# =================================================================================================
-def run_game_physics() -> None:
-    """
-    This runs the authoritative game physics on the server.
-    Only the server calculates ball movement, collisions, and scoring.
-    Clients just render what the server tells them.
-    """
-    global game_running
+# This is the main game loop.  For the most part, you will not need to modify this.  The sections
+# where you should add to the code are marked.  Feel free to change any part of this project
+# to suit your needs.
+def playGame(screenWidth:int, screenHeight:int, playerPaddle:str, client:socket.socket) -> None:
     
-    print("[PHYSICS] Game physics thread started")
-    
-    while game_running:
-        time.sleep(1/60)  # Run at 60 FPS like the client
+    # Pygame inits
+    pygame.mixer.pre_init(44100, -16, 2, 2048)
+    pygame.init()
+
+    # Constants
+    WHITE = (255,255,255)
+    clock = pygame.time.Clock()
+    scoreFont = pygame.font.Font("./assets/fonts/pong-score.ttf", 32)
+    winFont = pygame.font.Font("./assets/fonts/visitor.ttf", 48)
+    pointSound = pygame.mixer.Sound("./assets/sounds/point.wav")
+    bounceSound = pygame.mixer.Sound("./assets/sounds/bounce.wav")
+
+    # Display objects
+    screen = pygame.display.set_mode((screenWidth, screenHeight))
+    winMessage = pygame.Rect(0,0,0,0)
+    topWall = pygame.Rect(-10,0,screenWidth+20, 10)
+    bottomWall = pygame.Rect(-10, screenHeight-10, screenWidth+20, 10)
+    centerLine = []
+    for i in range(0, screenHeight, 10):
+        centerLine.append(pygame.Rect((screenWidth/2)-5,i,5,5))
+
+    # Paddle properties and init
+    paddleHeight = 50
+    paddleWidth = 10
+    paddleStartPosY = (screenHeight/2)-(paddleHeight/2)
+    leftPaddle = Paddle(pygame.Rect(10,paddleStartPosY, paddleWidth, paddleHeight))
+    rightPaddle = Paddle(pygame.Rect(screenWidth-20, paddleStartPosY, paddleWidth, paddleHeight))
+
+    ball = Ball(pygame.Rect(screenWidth/2, screenHeight/2, 5, 5), -5, 0)
+
+    if playerPaddle == "left":
+        opponentPaddleObj = rightPaddle
+        playerPaddleObj = leftPaddle
+    else:
+        opponentPaddleObj = leftPaddle
+        playerPaddleObj = rightPaddle
+
+    lScore = 0
+    rScore = 0
+
+    sync = 0
+
+    while True:
+        # Wiping the screen
+        screen.fill((0,0,0))
+
+        # Getting keypress events
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_DOWN:
+                    playerPaddleObj.moving = "down"
+
+                elif event.key == pygame.K_UP:
+                    playerPaddleObj.moving = "up"
+
+            elif event.type == pygame.KEYUP:
+                playerPaddleObj.moving = ""
+
+        # =========================================================================================
+        # Your code here to send an update to the server on your paddle's information,
+        # where the ball is and the current score.
+        # Feel free to change when the score is updated to suit your needs/requirements
         
-        with game_lock:
-            # Check if game is over (someone reached 5 points)
-            if game_state["left_score"] >= 5 or game_state["right_score"] >= 5:
-                # Don't update ball physics if game is over
-                continue
-            # Update ball position
-            game_state["ball_x"] += game_state["ball_xvel"]
-            game_state["ball_y"] += game_state["ball_yvel"]
-            
-            # Check for scoring (ball goes off left or right edge)
-            if game_state["ball_x"] > SCREEN_WIDTH:
-                game_state["left_score"] += 1
-                print(f"[SCORE] Left player scores! {game_state['left_score']}-{game_state['right_score']}")
-                # Reset ball to center, going left
-                game_state["ball_x"] = SCREEN_WIDTH / 2
-                game_state["ball_y"] = SCREEN_HEIGHT / 2
-                game_state["ball_xvel"] = -5.0
-                game_state["ball_yvel"] = 0.0
-                
-            elif game_state["ball_x"] < 0:
-                game_state["right_score"] += 1
-                print(f"[SCORE] Right player scores! {game_state['left_score']}-{game_state['right_score']}")
-                # Reset ball to center, going right
-                game_state["ball_x"] = SCREEN_WIDTH / 2
-                game_state["ball_y"] = SCREEN_HEIGHT / 2
-                game_state["ball_xvel"] = 5.0
-                game_state["ball_yvel"] = 0.0
-            
-            # Check for wall collisions (top and bottom)
-            if game_state["ball_y"] <= 10 or game_state["ball_y"] >= SCREEN_HEIGHT - 10:
-                game_state["ball_yvel"] *= -1
-            
-            # Check for paddle collisions
-            ball_rect = {
-                "left": game_state["ball_x"],
-                "right": game_state["ball_x"] + 5,
-                "top": game_state["ball_y"],
-                "bottom": game_state["ball_y"] + 5
-            }
-            
-            # Left paddle collision
-            left_paddle = {
-                "left": 10,
-                "right": 10 + PADDLE_WIDTH,
-                "top": game_state["left_paddle_y"],
-                "bottom": game_state["left_paddle_y"] + PADDLE_HEIGHT
-            }
-            
-            if (ball_rect["left"] <= left_paddle["right"] and 
-                ball_rect["right"] >= left_paddle["left"] and
-                ball_rect["bottom"] >= left_paddle["top"] and
-                ball_rect["top"] <= left_paddle["bottom"] and
-                game_state["ball_xvel"] < 0):  # Only if moving left
-                
-                game_state["ball_xvel"] *= -1
-                # Add paddle influence on Y velocity
-                paddle_center = left_paddle["top"] + PADDLE_HEIGHT / 2
-                ball_center = game_state["ball_y"] + 2.5
-                game_state["ball_yvel"] = (ball_center - paddle_center) / 2
-            
-            # Right paddle collision
-            right_paddle = {
-                "left": SCREEN_WIDTH - 20,
-                "right": SCREEN_WIDTH - 20 + PADDLE_WIDTH,
-                "top": game_state["right_paddle_y"],
-                "bottom": game_state["right_paddle_y"] + PADDLE_HEIGHT
-            }
-            
-            if (ball_rect["right"] >= right_paddle["left"] and 
-                ball_rect["left"] <= right_paddle["right"] and
-                ball_rect["bottom"] >= right_paddle["top"] and
-                ball_rect["top"] <= right_paddle["bottom"] and
-                game_state["ball_xvel"] > 0):  # Only if moving right
-                
-                game_state["ball_xvel"] *= -1
-                # Add paddle influence on Y velocity
-                paddle_center = right_paddle["top"] + PADDLE_HEIGHT / 2
-                ball_center = game_state["ball_y"] + 2.5
-                game_state["ball_yvel"] = (ball_center - paddle_center) / 2
-            
-            game_state["sync"] += 1
-
-
-# =================================================================================================
-# Author: Instructor
-# Purpose: Handle communication with a single client
-# Pre: client_socket is a connected socket, player_side is "left" or "right"
-# Post: Client is removed from clients dict when disconnected
-# =================================================================================================
-def handle_client(client_socket: socket.socket, player_side: str, address: tuple) -> None:
-    """
-    This function runs in a separate thread for each client.
-    It continuously:
-    1. Receives paddle position updates from the client
-    2. Sends the authoritative game state back to the client
-    """
-    print(f"[NEW CONNECTION] {address} connected as {player_side} paddle")
-    
-    buffer = ""  # Buffer to accumulate partial messages
-    
-    try:
-        # Send initial game info to client
-        initial_data = {
-            "screen_width": SCREEN_WIDTH,
-            "screen_height": SCREEN_HEIGHT,
-            "player_paddle": player_side
-        }
-        message = json.dumps(initial_data) + "\n"
-        client_socket.send(message.encode())
-        print(f"[SENT] Initial data to {player_side}: {initial_data}")
         
-        # Main communication loop
-        while True:
-            # Receive data from client
-            data = client_socket.recv(1024).decode()
-            
-            if not data:
-                print(f"[DISCONNECTED] {address} ({player_side} paddle)")
-                break
-            
-            # Add received data to buffer
-            buffer += data
-            
-            # Process all complete messages in buffer (messages end with \n)
-            while "\n" in buffer:
-                line, buffer = buffer.split("\n", 1)
+        # =========================================================================================
+
+        # Update the player paddle and opponent paddle's location on the screen
+        for paddle in [playerPaddleObj, opponentPaddleObj]:
+            if paddle.moving == "down":
+                if paddle.rect.bottomleft[1] < screenHeight-10:
+                    paddle.rect.y += paddle.speed
+            elif paddle.moving == "up":
+                if paddle.rect.topleft[1] > 10:
+                    paddle.rect.y -= paddle.speed
+
+        # If the game is over, display the win message
+        if lScore > 4 or rScore > 4:
+            winText = "Player 1 Wins! " if lScore > 4 else "Player 2 Wins! "
+            textSurface = winFont.render(winText, False, WHITE, (0,0,0))
+            textRect = textSurface.get_rect()
+            textRect.center = ((screenWidth/2), screenHeight/2)
+            winMessage = screen.blit(textSurface, textRect)
+        else:
+
+            # ==== Ball Logic =====================================================================
+            ball.updatePos()
+
+            # If the ball makes it past the edge of the screen, update score, etc.
+            if ball.rect.x > screenWidth:
+                lScore += 1
+                pointSound.play()
+                ball.reset(nowGoing="left")
+            elif ball.rect.x < 0:
+                rScore += 1
+                pointSound.play()
+                ball.reset(nowGoing="right")
                 
-                # Parse the JSON message from client
-                try:
-                    client_data = json.loads(line.strip())
-                except json.JSONDecodeError:
-                    print(f"[ERROR] Invalid JSON from {address}: {line}")
-                    continue
+            # If the ball hits a paddle
+            if ball.rect.colliderect(playerPaddleObj.rect):
+                bounceSound.play()
+                ball.hitPaddle(playerPaddleObj.rect.center[1])
+            elif ball.rect.colliderect(opponentPaddleObj.rect):
+                bounceSound.play()
+                ball.hitPaddle(opponentPaddleObj.rect.center[1])
                 
-                # Update only the paddle position from this client
-                with game_lock:
-                    if player_side == "left":
-                        game_state["left_paddle_y"] = client_data.get("paddle_y", game_state["left_paddle_y"])
-                    else:
-                        game_state["right_paddle_y"] = client_data.get("paddle_y", game_state["right_paddle_y"])
-                    
-                    # Prepare full game state to send back
-                    # Send BOTH paddle positions so client knows both
-                    response_data = {
-                        "left_paddle_y": game_state["left_paddle_y"],
-                        "right_paddle_y": game_state["right_paddle_y"],
-                        "ball_x": game_state["ball_x"],
-                        "ball_y": game_state["ball_y"],
-                        "ball_xvel": game_state["ball_xvel"],
-                        "ball_yvel": game_state["ball_yvel"],
-                        "left_score": game_state["left_score"],
-                        "right_score": game_state["right_score"],
-                        "sync": game_state["sync"],
-                        "player_side": player_side  # Tell client which paddle is theirs
-                    }
-                
-                # Send updated game state back to client
-                response_message = json.dumps(response_data) + "\n"
-                client_socket.send(response_message.encode())
+            # If the ball hits a wall
+            if ball.rect.colliderect(topWall) or ball.rect.colliderect(bottomWall):
+                bounceSound.play()
+                ball.hitWall()
             
-    except Exception as e:
-        print(f"[ERROR] Exception with {address}: {e}")
-    
-    finally:
-        client_socket.close()
-        with clients_lock:
-            if player_side in clients:
-                del clients[player_side]
-        print(f"[CLOSED] Connection with {address} closed")
+            pygame.draw.rect(screen, WHITE, ball)
+            # ==== End Ball Logic =================================================================
+
+        # Drawing the dotted line in the center
+        for i in centerLine:
+            pygame.draw.rect(screen, WHITE, i)
+        
+        # Drawing the player's new location
+        for paddle in [playerPaddleObj, opponentPaddleObj]:
+            pygame.draw.rect(screen, WHITE, paddle)
+
+        pygame.draw.rect(screen, WHITE, topWall)
+        pygame.draw.rect(screen, WHITE, bottomWall)
+        scoreRect = updateScore(lScore, rScore, screen, WHITE, scoreFont)
+        pygame.display.update([topWall, bottomWall, ball, leftPaddle, rightPaddle, scoreRect, winMessage])
+        clock.tick(60)
+        
+        # This number should be synchronized between you and your opponent.  If your number is larger
+        # then you are ahead of them in time, if theirs is larger, they are ahead of you, and you need to
+        # catch up (use their info)
+        sync += 1
+        # =========================================================================================
+        # Send your server update here at the end of the game loop to sync your game with your
+        # opponent's game
+
+        # =========================================================================================
 
 
-# =================================================================================================
-# Author: Instructor
-# Purpose: Start the server and accept client connections
-# Pre: None
-# Post: Server is running and handling up to 2 clients
-# =================================================================================================
-def start_server(host: str = "0.0.0.0", port: int = 5000) -> None:
-    """
-    Main server function that accepts connections and starts game physics
-    """
-    global game_running
-    
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_socket.bind((host, port))
-    server_socket.listen(5)  # Allow queue of connections
-    
-    print(f"[STARTING] Server starting on {host}:{port}")
-    print(f"[LISTENING] Waiting for players to connect...")
-    
-    # Start the game physics thread (runs continuously)
-    game_running = True
-    physics_thread = threading.Thread(target=run_game_physics)
-    physics_thread.daemon = True
-    physics_thread.start()
-    
-    # Continuously accept new connections
-    try:
-        while True:
-            client_socket, address = server_socket.accept()
-            
-            # Determine which paddle to assign
-            with clients_lock:
-                if "left" not in clients:
-                    player_side = "left"
-                    clients["left"] = client_socket
-                elif "right" not in clients:
-                    player_side = "right"
-                    clients["right"] = client_socket
-                else:
-                    # Both slots full, reject this connection
-                    print(f"[REJECTED] Connection from {address} - game is full")
-                    try:
-                        error_msg = json.dumps({"error": "Game is full"}) + "\n"
-                        client_socket.send(error_msg.encode())
-                    except:
-                        pass
-                    client_socket.close()
-                    continue
-            
-            # Create thread for this player
-            thread = threading.Thread(target=handle_client, args=(client_socket, player_side, address))
-            thread.daemon = True
-            thread.start()
-            
-            print(f"[CONNECTED] {address} connected as {player_side} paddle")
-            
-            # Check if we now have 2 players
-            with clients_lock:
-                num_players = len(clients)
-            
-            if num_players == 2:
-                print(f"[GAME READY] Both players connected! Game is live.")
-            else:
-                print(f"[WAITING] {num_players}/2 players connected. Waiting for opponent...")
-                
-    except KeyboardInterrupt:
-        print("\n[SHUTDOWN] Server shutting down...")
-        game_running = False
-        server_socket.close()
-        sys.exit(0)
 
+
+# This is where you will connect to the server to get the info required to call the game loop.  Mainly
+# the screen width, height and player paddle (either "left" or "right")
+# If you want to hard code the screen's dimensions into the code, that's fine, but you will need to know
+# which client is which
+def joinServer(ip:str, port:str, errorLabel:tk.Label, app:tk.Tk) -> None:
+    # Purpose:      This method is fired when the join button is clicked
+    # Arguments:
+    # ip            A string holding the IP address of the server
+    # port          A string holding the port the server is using
+    # errorLabel    A tk label widget, modify it's text to display messages to the user (example below)
+    # app           The tk window object, needed to kill the window
+    
+    # Create a socket and connect to the server
+    # You don't have to use SOCK_STREAM, use what you think is best
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    # Get the required information from your server (screen width, height & player paddle, "left or "right)
+
+
+    # If you have messages you'd like to show the user use the errorLabel widget like so
+    errorLabel.config(text=f"Some update text. You input: IP: {ip}, Port: {port}")
+    # You may or may not need to call this, depending on how many times you update the label
+    errorLabel.update()     
+
+    # Close this window and start the game with the info passed to you from the server
+    #app.withdraw()     # Hides the window (we'll kill it later)
+    #playGame(screenWidth, screenHeight, ("left"|"right"), client)  # User will be either left or right paddle
+    #app.quit()         # Kills the window
+
+
+# This displays the opening screen, you don't need to edit this (but may if you like)
+def startScreen():
+    app = tk.Tk()
+    app.title("Server Info")
+
+    image = tk.PhotoImage(file="./assets/images/logo.png")
+
+    titleLabel = tk.Label(image=image)
+    titleLabel.grid(column=0, row=0, columnspan=2)
+
+    ipLabel = tk.Label(text="Server IP:")
+    ipLabel.grid(column=0, row=1, sticky="W", padx=8)
+
+    ipEntry = tk.Entry(app)
+    ipEntry.grid(column=1, row=1)
+
+    portLabel = tk.Label(text="Server Port:")
+    portLabel.grid(column=0, row=2, sticky="W", padx=8)
+
+    portEntry = tk.Entry(app)
+    portEntry.grid(column=1, row=2)
+
+    errorLabel = tk.Label(text="")
+    errorLabel.grid(column=0, row=4, columnspan=2)
+
+    joinButton = tk.Button(text="Join", command=lambda: joinServer(ipEntry.get(), portEntry.get(), errorLabel, app))
+    joinButton.grid(column=0, row=3, columnspan=2)
+
+    app.mainloop()
 
 if __name__ == "__main__":
-    HOST = "127.0.0.1"
-    PORT = 5000
+    #startScreen()
     
-    start_server(HOST, PORT)
+    # Uncomment the line below if you want to play the game without a server to see how it should work
+    # the startScreen() function should call playGame with the arguments given to it by the server this is
+    # here for demo purposes only
+    playGame(640, 480,"left",socket.socket(socket.AF_INET, socket.SOCK_STREAM))
