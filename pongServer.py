@@ -2,7 +2,9 @@
 # Contributing Authors:	    <Anyone who touched the code>
 # Email Addresses:          <Your uky.edu email addresses>
 # Date:                     <The date the file was last edited>
-# Purpose:                  <How this file contributes to the project>
+# Purpose:                  This server manages the game state for a multiplayer Pong game.
+#                           It handles connections from two clients, synchronizes paddle positions,
+#                           ball coordinates, and scores, and relays this information between players.
 # Misc:                     <Not Required.  Anything else you might want to include>
 # =================================================================================================
 
@@ -16,7 +18,8 @@ import threading
 # I suggest you use the sync variable in pongClient.py to determine how out of sync your two
 # clients are and take actions to resync the games
 
-# Global game state
+# Global game state dictionary to store the current status of the game elements
+# This acts as the "source of truth" for the server
 gameState = {
     "leftPaddleY": 215,  # Center (480/2 - 50/2)
     "rightPaddleY": 215,
@@ -26,15 +29,25 @@ gameState = {
     "rScore": 0,
     "sync": 0
 }
+
+# Lock to ensure thread-safe access to the global gameState
+# This prevents race conditions when multiple client threads try to read/write state simultaneously
 gameLock = threading.Lock()
 
 def client_handler(client_socket, player_side):
+    """
+    Handles communication with a single connected client.
+    
+    Args:
+        client_socket (socket): The socket object for the connected client.
+        player_side (str): The side assigned to this client ("left" or "right").
+    """
     global gameState
     
     try:
         while True:
             # Receive data from client
-            # Format: paddleY,ballX,ballY,lScore,rScore,sync
+            # Expected Format: paddleY,ballX,ballY,lScore,rScore,sync
             data = client_socket.recv(1024).decode()
             if not data:
                 break
@@ -43,6 +56,7 @@ def client_handler(client_socket, player_side):
             if len(parts) != 6:
                 continue
                 
+            # Parse the received data
             paddleY = float(parts[0])
             ballX = float(parts[1])
             ballY = float(parts[2])
@@ -50,18 +64,19 @@ def client_handler(client_socket, player_side):
             rScore = int(parts[4])
             sync = int(parts[5])
             
+            # Acquire lock to safely update the shared game state
             with gameLock:
                 # Update server state based on who sent it
+                # We only trust the client to update their OWN paddle position
                 if player_side == "left":
                     gameState["leftPaddleY"] = paddleY
                 else:
                     gameState["rightPaddleY"] = paddleY
                 
-                # Update shared state if this client is "newer" or just update anyway
-                # Simple approach: Always update ball/score/sync from the client
-                # Ideally, we might want one authoritative client for the ball, 
-                # but for simplicity, we'll accept updates.
-                # To avoid jitter, maybe only update ball if sync is higher?
+                # Update shared state (ball, score, sync)
+                # Logic: If the client's sync count is higher, it means they have newer game data.
+                # This is a simple way to keep states roughly in sync, though a more robust
+                # authoritative server model would calculate physics here instead of trusting clients.
                 if sync > gameState["sync"]:
                     gameState["ballX"] = ballX
                     gameState["ballY"] = ballY
@@ -69,7 +84,9 @@ def client_handler(client_socket, player_side):
                     gameState["rScore"] = rScore
                     gameState["sync"] = sync
                 
-                # Prepare response
+                # Prepare response to send back to the client
+                # We send the OPPONENT'S paddle position so this client can render it.
+                # We also send back the authoritative (or latest) ball and score data.
                 # Format: oppPaddleY,ballX,ballY,lScore,rScore,sync
                 if player_side == "left":
                     oppPaddleY = gameState["rightPaddleY"]
@@ -78,40 +95,56 @@ def client_handler(client_socket, player_side):
                 
                 response = f"{oppPaddleY},{gameState['ballX']},{gameState['ballY']},{gameState['lScore']},{gameState['rScore']},{gameState['sync']}"
             
+            # Send the constructed response string back to the client
             client_socket.send(response.encode())
             
     except Exception as e:
         print(f"Error with {player_side} client: {e}")
     finally:
+        # Clean up the connection when the loop ends or an error occurs
         client_socket.close()
 
 def main():
-    server_ip = "127.0.0.1"
-    server_port = 12321
+    """
+    Main server function to set up the socket and accept client connections.
+    """
+    # Server configuration
+    server_ip = "127.0.0.1" # Localhost
+    server_port = 5555      # Port to listen on
     
+    # Create a TCP/IP socket
+    # AF_INET = IPv4, SOCK_STREAM = TCP
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    
+    # Bind the socket to the address and port
     server.bind((server_ip, server_port))
+    
+    # Listen for incoming connections (queue up to 2 requests)
     server.listen(2)
     
     print(f"Server listening on {server_ip}:{server_port}")
     
     clients = []
     
-    # Wait for 2 clients
+    # Wait for exactly 2 clients to connect before starting the game logic fully
+    # (Note: The threads start immediately upon connection, but the game relies on 2 players)
     while len(clients) < 2:
         client_sock, addr = server.accept()
         print(f"Accepted connection from {addr}")
         clients.append(client_sock)
         
-        # Determine side
+        # Determine side assignment based on connection order
+        # First to connect is "left", second is "right"
         side = "left" if len(clients) == 1 else "right"
         
-        # Send initial config: screenWidth,screenHeight,playerPaddle
-        # Screen size hardcoded to 640x480 as per pongClient.py default
+        # Send initial configuration to the client
+        # Format: screenWidth,screenHeight,playerSide
+        # Screen size is hardcoded to 640x480 to match the client's default
         config = f"640,480,{side}"
         client_sock.send(config.encode())
         
-        # Start thread
+        # Start a new thread to handle this client's communication
+        # This allows the server to handle multiple clients simultaneously
         thread = threading.Thread(target=client_handler, args=(client_sock, side))
         thread.start()
 

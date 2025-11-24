@@ -214,8 +214,8 @@ def joinServer(ip:str, port:str, errorLabel:tk.Label, app:tk.Tk) -> None:
 
         # Get the required information from your server (screen width, height & player paddle, "left or "right)
         # Format: screenWidth,screenHeight,playerPaddle
-        data = client.recv(1024).decode()
-        parts = data.split(',')
+        data = client.recv(1024).decode() # "640,480,left"
+        parts = data.split(',') # [640,480,"left"]
         
         screenWidth = int(parts[0])
         screenHeight = int(parts[1])
