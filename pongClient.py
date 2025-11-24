@@ -85,16 +85,20 @@ def playGame(screenWidth:int, screenHeight:int, playerPaddle:str, client:socket.
         # Feel free to change when the score is updated to suit your needs/requirements
         
         try:
+            # Prepare the message to send to the server
+            # We send our paddle's Y position, the ball's position, the current scores, and the sync counter.
             # Format: paddleY,ballX,ballY,lScore,rScore,sync
             msg = f"{playerPaddleObj.rect.y},{ball.rect.x},{ball.rect.y},{lScore},{rScore},{sync}"
             client.send(msg.encode())
             
             # Receive update from server
+            # The server responds with the opponent's paddle position and the authoritative game state.
             # Format: oppPaddleY,ballX,ballY,lScore,rScore,sync
             response = client.recv(1024).decode()
             parts = response.split(',')
             
             if len(parts) == 6:
+                # Parse the server response
                 oppPaddleY = float(parts[0])
                 serverBallX = float(parts[1])
                 serverBallY = float(parts[2])
@@ -102,12 +106,16 @@ def playGame(screenWidth:int, screenHeight:int, playerPaddle:str, client:socket.
                 serverRScore = int(parts[4])
                 serverSync = int(parts[5])
                 
-                # Update opponent paddle
+                # Update opponent paddle position immediately
+                # This ensures we see the opponent moving in real-time
                 opponentPaddleObj.rect.y = oppPaddleY
                 
-                # Sync logic
+                # Sync logic:
+                # If the server's sync counter is higher than ours, it means the server has a newer state
+                # (likely from the other client or its own calculations).
+                # We update our local state to match the server's to ensure consistency.
                 if serverSync > sync:
-                    # We are behind, catch up
+                    # We are behind, catch up to the server's state
                     ball.rect.x = serverBallX
                     ball.rect.y = serverBallY
                     lScore = serverLScore
@@ -209,13 +217,15 @@ def joinServer(ip:str, port:str, errorLabel:tk.Label, app:tk.Tk) -> None:
     # Create a socket and connect to the server
     # You don't have to use SOCK_STREAM, use what you think is best
     try:
+        # Initialize the socket using IPv4 (AF_INET) and TCP (SOCK_STREAM)
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client.connect((ip, int(port)))
 
         # Get the required information from your server (screen width, height & player paddle, "left or "right)
+        # This initial handshake determines which side we are playing on.
         # Format: screenWidth,screenHeight,playerPaddle
-        data = client.recv(1024).decode() # "640,480,left"
-        parts = data.split(',') # [640,480,"left"]
+        data = client.recv(1024).decode() # Example: "640,480,left"
+        parts = data.split(',') # Example: [640, 480, "left"]
         
         screenWidth = int(parts[0])
         screenHeight = int(parts[1])
