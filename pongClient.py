@@ -48,6 +48,9 @@ def playGame(screenWidth:int, screenHeight:int, playerPaddle:str, client:socket.
 
     ball = Ball(pygame.Rect(screenWidth/2, screenHeight/2, 5, 5), -5, 0)
 
+    # Left player drives the core physics to give the server a single authority
+    isBallAuthority = playerPaddle == "left"
+
     if playerPaddle == "left":
         opponentPaddleObj = rightPaddle
         playerPaddleObj = leftPaddle
@@ -59,6 +62,8 @@ def playGame(screenWidth:int, screenHeight:int, playerPaddle:str, client:socket.
     rScore = 0
 
     sync = 0
+    lastBallDX = 0
+    lastBallDY = 0
 
     while True:
         # Wiping the screen
@@ -79,20 +84,66 @@ def playGame(screenWidth:int, screenHeight:int, playerPaddle:str, client:socket.
             elif event.type == pygame.KEYUP:
                 playerPaddleObj.moving = ""
 
+        # Allow a single client to push authoritative physics to the server
+        if isBallAuthority and lScore <= 4 and rScore <= 4:
+            ball.updatePos()
+            sync += 1
+
+            if ball.rect.top <= topWall.bottom:
+                ball.rect.top = topWall.bottom
+                ball.hitWall()
+                bounceSound.play()
+                sync += 1
+
+            if ball.rect.bottom >= bottomWall.top:
+                ball.rect.bottom = bottomWall.top
+                ball.hitWall()
+                bounceSound.play()
+                sync += 1
+
+            if ball.rect.colliderect(leftPaddle.rect) and ball.xVel < 0:
+                ball.rect.left = leftPaddle.rect.right
+                ball.hitPaddle(leftPaddle.rect.centery)
+                bounceSound.play()
+                sync += 1
+
+            if ball.rect.colliderect(rightPaddle.rect) and ball.xVel > 0:
+                ball.rect.right = rightPaddle.rect.left
+                ball.hitPaddle(rightPaddle.rect.centery)
+                bounceSound.play()
+                sync += 1
+
+            if ball.rect.left <= 0:
+                rScore += 1
+                pointSound.play()
+                ball.reset("right")
+                lastBallDX = 0
+                lastBallDY = 0
+                sync += 1
+
+            if ball.rect.right >= screenWidth:
+                lScore += 1
+                pointSound.play()
+                ball.reset("left")
+                lastBallDX = 0
+                lastBallDY = 0
+                sync += 1
+
+        oldBallX = ball.rect.x
+        oldBallY = ball.rect.y
+
         # =========================================================================================
         # Your code here to send an update to the server on your paddle's information,
         # where the ball is and the current score.
         # Feel free to change when the score is updated to suit your needs/requirements
         
         try:
-            # Prepare the message to send to the server
-            # We send our paddle's Y position, the ball's position, the current scores, and the sync counter.
-            # Format: paddleY,ballX,ballY,lScore,rScore,sync
+            # Send the full six-field payload the server expects:
+            # paddleY,ballX,ballY,lScore,rScore,sync
             msg = f"{playerPaddleObj.rect.y},{ball.rect.x},{ball.rect.y},{lScore},{rScore},{sync}"
             client.send(msg.encode())
             
-            # Receive update from server
-            # The server responds with the opponent's paddle position and the authoritative game state.
+            # Receive authoritative game state from server
             # Format: oppPaddleY,ballX,ballY,lScore,rScore,sync
             response = client.recv(1024).decode()
             parts = response.split(',')
@@ -106,21 +157,32 @@ def playGame(screenWidth:int, screenHeight:int, playerPaddle:str, client:socket.
                 serverRScore = int(parts[4])
                 serverSync = int(parts[5])
                 
-                # Update opponent paddle position immediately
-                # This ensures we see the opponent moving in real-time
+                # Update all state from server (server is authoritative)
                 opponentPaddleObj.rect.y = oppPaddleY
-                
-                # Sync logic:
-                # If the server's sync counter is higher than ours, it means the server has a newer state
-                # (likely from the other client or its own calculations).
-                # We update our local state to match the server's to ensure consistency.
-                if serverSync > sync:
-                    # We are behind, catch up to the server's state
-                    ball.rect.x = serverBallX
-                    ball.rect.y = serverBallY
-                    lScore = serverLScore
-                    rScore = serverRScore
-                    sync = serverSync
+                scored = serverLScore > lScore or serverRScore > rScore
+                if scored and not isBallAuthority:
+                    pointSound.play()
+
+                newDX = serverBallX - oldBallX
+                newDY = serverBallY - oldBallY
+
+                ball.rect.x = serverBallX
+                ball.rect.y = serverBallY
+
+                if not isBallAuthority and not scored:
+                    if (lastBallDX > 0 and newDX < 0) or (lastBallDX < 0 and newDX > 0):
+                        bounceSound.play()
+                    elif (lastBallDY > 0 and newDY < 0) or (lastBallDY < 0 and newDY > 0):
+                        bounceSound.play()
+                    lastBallDX = newDX
+                    lastBallDY = newDY
+                else:
+                    lastBallDX = 0
+                    lastBallDY = 0
+
+                lScore = serverLScore
+                rScore = serverRScore
+                sync = serverSync
                     
         except Exception as e:
             print(f"Error communicating with server: {e}")
@@ -145,32 +207,13 @@ def playGame(screenWidth:int, screenHeight:int, playerPaddle:str, client:socket.
             textRect.center = ((screenWidth/2), screenHeight/2)
             winMessage = screen.blit(textSurface, textRect)
         else:
-
-            # ==== Ball Logic =====================================================================
-            ball.updatePos()
-
-            # If the ball makes it past the edge of the screen, update score, etc.
-            if ball.rect.x > screenWidth:
-                lScore += 1
-                pointSound.play()
-                ball.reset(nowGoing="left")
-            elif ball.rect.x < 0:
-                rScore += 1
-                pointSound.play()
-                ball.reset(nowGoing="right")
-                
-            # If the ball hits a paddle
-            if ball.rect.colliderect(playerPaddleObj.rect):
-                bounceSound.play()
-                ball.hitPaddle(playerPaddleObj.rect.center[1])
-            elif ball.rect.colliderect(opponentPaddleObj.rect):
-                bounceSound.play()
-                ball.hitPaddle(opponentPaddleObj.rect.center[1])
-                
-            # If the ball hits a wall
-            if ball.rect.colliderect(topWall) or ball.rect.colliderect(bottomWall):
-                bounceSound.play()
-                ball.hitWall()
+            # Ball position is now controlled by the server
+            # We just render it at the position the server tells us
+            # Note: We could add client-side prediction here for smoother movement,
+            # but for now we trust the server completely for simplicity
+            
+            # Optional: Play sounds based on ball position changes
+            # (This is a simple heuristic - could be improved with velocity info from server)
             
             pygame.draw.rect(screen, WHITE, ball)
             # ==== End Ball Logic =================================================================
@@ -189,14 +232,9 @@ def playGame(screenWidth:int, screenHeight:int, playerPaddle:str, client:socket.
         pygame.display.update([topWall, bottomWall, ball, leftPaddle, rightPaddle, scoreRect, winMessage])
         clock.tick(60)
         
-        # This number should be synchronized between you and your opponent.  If your number is larger
-        # then you are ahead of them in time, if theirs is larger, they are ahead of you, and you need to
-        # catch up (use their info)
-        sync += 1
-        # =========================================================================================
-        # Send your server update here at the end of the game loop to sync your game with your
-        # opponent's game
-        # (Implemented above in the loop)
+        # Sync counter is now managed by the server
+        # The server increments it on significant events (collisions, scoring)
+        # and we receive the updated value in each server response
         # =========================================================================================
 
 
