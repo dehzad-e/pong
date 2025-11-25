@@ -37,6 +37,17 @@ gameLock = threading.Lock()
 # Track connected clients to handle disconnections and reconnections
 connected_clients = {"left": None, "right": None}
 
+def reset_game_state():
+    """Resets the game state to initial values."""
+    gameState["leftPaddleY"] = 215
+    gameState["rightPaddleY"] = 215
+    gameState["ballX"] = 320
+    gameState["ballY"] = 240
+    gameState["lScore"] = 0
+    gameState["rScore"] = 0
+    gameState["sync"] = 0
+    print("Game state reset.")
+
 def client_handler(client_socket, player_side):
     """
     Handles communication with a single connected client.
@@ -108,6 +119,8 @@ def client_handler(client_socket, player_side):
         print(f"Client {player_side} disconnected")
         with gameLock:
             connected_clients[player_side] = None
+            if connected_clients["left"] is None and connected_clients["right"] is None:
+                reset_game_state()
         client_socket.close()
 
 def main():
