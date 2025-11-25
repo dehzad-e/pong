@@ -350,7 +350,7 @@ def joinServer(ip:str, port:str, errorLabel:tk.Label, app:tk.Tk) -> None:
 
 
 # This displays the opening screen, you don't need to edit this (but may if you like)
-def startScreen():
+def startScreen() -> None:
     app = tk.Tk()
     app.title("Server Info")
 

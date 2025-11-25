@@ -2,7 +2,7 @@
 import pygame
 
 # This draws the score to the screen
-def updateScore(lScore:int, rScore:int, screen:pygame.surface.Surface, color, scoreFont:pygame.font.Font) -> pygame.Rect:
+def updateScore(lScore:int, rScore:int, screen:pygame.surface.Surface, color: tuple[int, int, int], scoreFont:pygame.font.Font) -> pygame.Rect:
     textSurface = scoreFont.render(f"{lScore}   {rScore}", False, color)
     textRect = textSurface.get_rect()
     screenWidth = screen.get_width()

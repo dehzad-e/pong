@@ -39,7 +39,7 @@ gameLock = threading.Lock()
 # Track connected clients to handle disconnections and reconnections
 connected_clients = {"left": None, "right": None}
 
-def reset_game_state():
+def reset_game_state() -> None:
     """Resets the game state to initial values."""
     gameState["leftPaddleY"] = 215
     gameState["rightPaddleY"] = 215
@@ -50,7 +50,7 @@ def reset_game_state():
     gameState["sync"] = 0
     print("Game state reset.")
 
-def client_handler(client_socket, player_side):
+def client_handler(client_socket: socket.socket, player_side: str) -> None:
     """
     Handles communication with a single connected client.
     
@@ -125,7 +125,7 @@ def client_handler(client_socket, player_side):
                 reset_game_state()
         client_socket.close()
 
-def main():
+def main() -> None:
     """
     Main server function to set up the socket and accept client connections.
     """
