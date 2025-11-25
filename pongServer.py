@@ -1,11 +1,13 @@
 # =================================================================================================
-# Contributing Authors:	    <Anyone who touched the code>
-# Email Addresses:          <Your uky.edu email addresses>
-# Date:                     <The date the file was last edited>
+# Contributing Authors:	    Ehsanullah Dehzad, Fatima Fayazi, David Salas
+# Email Addresses:          ede274@uky.edu, ffa241@uky.edu, davidsalas@uky.edu
+# Date:                     Nov 25, 2025
 # Purpose:                  This server manages the game state for a multiplayer Pong game.
 #                           It handles connections from two clients, synchronizes paddle positions,
 #                           ball coordinates, and scores, and relays this information between players.
-# Misc:                     <Not Required.  Anything else you might want to include>
+# Misc:                     Uses TCP sockets for reliable communication. The left client is the
+#                           authoritative physics engine. Threading allows simultaneous client handling.
+#                           Communication protocol: CSV format for game state (6 fields).
 # =================================================================================================
 
 import socket
