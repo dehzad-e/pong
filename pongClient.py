@@ -65,6 +65,9 @@ def playGame(screenWidth:int, screenHeight:int, playerPaddle:str, client:socket.
     lastBallDX = 0
     lastBallDY = 0
 
+    # Set socket to non-blocking mode with a small timeout to prevent game freeze
+    client.settimeout(0.01)
+
     while True:
         # Wiping the screen
         screen.fill((0,0,0))
@@ -145,44 +148,51 @@ def playGame(screenWidth:int, screenHeight:int, playerPaddle:str, client:socket.
             
             # Receive authoritative game state from server
             # Format: oppPaddleY,ballX,ballY,lScore,rScore,sync
-            response = client.recv(1024).decode()
-            parts = response.split(',')
-            
-            if len(parts) == 6:
-                # Parse the server response
-                oppPaddleY = float(parts[0])
-                serverBallX = float(parts[1])
-                serverBallY = float(parts[2])
-                serverLScore = int(parts[3])
-                serverRScore = int(parts[4])
-                serverSync = int(parts[5])
+            try:
+                response = client.recv(1024).decode()
+                parts = response.split(',')
                 
-                # Update all state from server (server is authoritative)
-                opponentPaddleObj.rect.y = oppPaddleY
-                scored = serverLScore > lScore or serverRScore > rScore
-                if scored and not isBallAuthority:
-                    pointSound.play()
+                if len(parts) == 6:
+                    # Parse the server response
+                    oppPaddleY = float(parts[0])
+                    serverBallX = float(parts[1])
+                    serverBallY = float(parts[2])
+                    serverLScore = int(parts[3])
+                    serverRScore = int(parts[4])
+                    serverSync = int(parts[5])
+                    
+                    # Update all state from server (server is authoritative)
+                    opponentPaddleObj.rect.y = oppPaddleY
+                    scored = serverLScore > lScore or serverRScore > rScore
+                    if scored and not isBallAuthority:
+                        pointSound.play()
 
-                newDX = serverBallX - oldBallX
-                newDY = serverBallY - oldBallY
+                    newDX = serverBallX - oldBallX
+                    newDY = serverBallY - oldBallY
 
-                ball.rect.x = serverBallX
-                ball.rect.y = serverBallY
+                    ball.rect.x = serverBallX
+                    ball.rect.y = serverBallY
 
-                if not isBallAuthority and not scored:
-                    if (lastBallDX > 0 and newDX < 0) or (lastBallDX < 0 and newDX > 0):
-                        bounceSound.play()
-                    elif (lastBallDY > 0 and newDY < 0) or (lastBallDY < 0 and newDY > 0):
-                        bounceSound.play()
-                    lastBallDX = newDX
-                    lastBallDY = newDY
-                else:
-                    lastBallDX = 0
-                    lastBallDY = 0
+                    if not isBallAuthority and not scored:
+                        if (lastBallDX > 0 and newDX < 0) or (lastBallDX < 0 and newDX > 0):
+                            bounceSound.play()
+                        elif (lastBallDY > 0 and newDY < 0) or (lastBallDY < 0 and newDY > 0):
+                            bounceSound.play()
+                        lastBallDX = newDX
+                        lastBallDY = newDY
+                    else:
+                        lastBallDX = 0
+                        lastBallDY = 0
 
-                lScore = serverLScore
-                rScore = serverRScore
-                sync = serverSync
+                    lScore = serverLScore
+                    rScore = serverRScore
+                    sync = serverSync
+            except socket.timeout:
+                # No data received this frame, continue with local state
+                pass
+            except socket.error as e:
+                print(f"Socket error: {e}")
+                break
                     
         except Exception as e:
             print(f"Error communicating with server: {e}")

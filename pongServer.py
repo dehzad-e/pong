@@ -34,6 +34,9 @@ gameState = {
 # This prevents race conditions when multiple client threads try to read/write state simultaneously
 gameLock = threading.Lock()
 
+# Track connected clients to handle disconnections and reconnections
+connected_clients = {"left": None, "right": None}
+
 def client_handler(client_socket, player_side):
     """
     Handles communication with a single connected client.
@@ -42,7 +45,7 @@ def client_handler(client_socket, player_side):
         client_socket (socket): The socket object for the connected client.
         player_side (str): The side assigned to this client ("left" or "right").
     """
-    global gameState
+    global gameState, connected_clients
     
     try:
         while True:
@@ -102,6 +105,9 @@ def client_handler(client_socket, player_side):
         print(f"Error with {player_side} client: {e}")
     finally:
         # Clean up the connection when the loop ends or an error occurs
+        print(f"Client {player_side} disconnected")
+        with gameLock:
+            connected_clients[player_side] = None
         client_socket.close()
 
 def main():
@@ -124,29 +130,36 @@ def main():
     
     print(f"Server listening on {server_ip}:{server_port}")
     
-    clients = []
-    
-    # Wait for exactly 2 clients to connect before starting the game logic fully
-    # (Note: The threads start immediately upon connection, but the game relies on 2 players)
-    while len(clients) < 2:
+    # Wait for clients to connect
+    while True:
         client_sock, addr = server.accept()
         print(f"Accepted connection from {addr}")
-        clients.append(client_sock)
         
-        # Determine side assignment based on connection order
-        # First to connect is "left", second is "right"
-        side = "left" if len(clients) == 1 else "right"
+        # Determine side assignment based on available slots
+        side = None
+        with gameLock:
+            if connected_clients["left"] is None:
+                side = "left"
+            elif connected_clients["right"] is None:
+                side = "right"
         
-        # Send initial configuration to the client
-        # Format: screenWidth,screenHeight,playerSide
-        # Screen size is hardcoded to 640x480 to match the client's default
-        config = f"640,480,{side}"
-        client_sock.send(config.encode())
-        
-        # Start a new thread to handle this client's communication
-        # This allows the server to handle multiple clients simultaneously
-        thread = threading.Thread(target=client_handler, args=(client_sock, side))
-        thread.start()
+        if side:
+            with gameLock:
+                connected_clients[side] = client_sock
+            
+            # Send initial configuration to the client
+            # Format: screenWidth,screenHeight,playerSide
+            # Screen size is hardcoded to 640x480 to match the client's default
+            config = f"640,480,{side}"
+            client_sock.send(config.encode())
+            
+            # Start a new thread to handle this client's communication
+            # This allows the server to handle multiple clients simultaneously
+            thread = threading.Thread(target=client_handler, args=(client_sock, side))
+            thread.start()
+        else:
+            print("Server full. Rejecting connection.")
+            client_sock.close()
 
 if __name__ == "__main__":
     main()
