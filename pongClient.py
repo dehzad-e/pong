@@ -295,11 +295,18 @@ def playGame(screenWidth:int, screenHeight:int, playerPaddle:str, client:socket.
 
 
 
+
 # This is where you will connect to the server to get the info required to call the game loop.  Mainly
 # the screen width, height and player paddle (either "left" or "right")
 # If you want to hard code the screen's dimensions into the code, that's fine, but you will need to know
 # which client is which
 def joinServer(ip:str, port:str, errorLabel:tk.Label, app:tk.Tk) -> None:
+    # Author:           Ehsanullah Dehzad, Fatima Fayazi, David Salas
+    # Purpose:          Connect to the game server, receive initial configuration, and launch the game
+    # Pre:              ip and port are valid; server is running and accepting connections; tkinter app window is open
+    # Post:             TCP connection established with server; screen dimensions and player side received; tkinter
+    #                   window hidden; playGame() is called with server configuration; on error, errorLabel displays error message
+    
     """
     Connects to the game server and initiates the game session.
     Called when the user clicks the Join button in the connection GUI.

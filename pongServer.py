@@ -39,8 +39,13 @@ gameLock = threading.Lock()
 # Track connected clients to handle disconnections and reconnections
 connected_clients = {"left": None, "right": None}
 
+
 def reset_game_state() -> None:
-    """Resets the game state to initial values."""
+    # Author:           Ehsanullah Dehzad, Fatima Fayazi, David Salas
+    # Purpose:          Reset the global game state to initial values when both clients disconnect
+    # Pre:              Called when both clients have disconnected (connected_clients["left"] and ["right"] are None)
+    # Post:             All gameState variables are reset to starting values
+    #                   (paddles centered, ball centered, scores 0, sync 0)
     gameState["leftPaddleY"] = 215
     gameState["rightPaddleY"] = 215
     gameState["ballX"] = 320
@@ -50,14 +55,17 @@ def reset_game_state() -> None:
     gameState["sync"] = 0
     print("Game state reset.")
 
+
 def client_handler(client_socket: socket.socket, player_side: str) -> None:
-    """
-    Handles communication with a single connected client.
-    
-    Args:
-        client_socket (socket): The socket object for the connected client.
-        player_side (str): The side assigned to this client ("left" or "right").
-    """
+    # Author:           Ehsanullah Dehzad, Fatima Fayazi, David Salas
+    # Purpose:          Handle continuous communication with a connected client, receiving
+    #                   their state and sending back synchronized game state
+    # Pre:              client_socket is a valid connected socket; player_side is either "left" or "right";
+    #                   gameState and connected_clients are initialized
+    # Post:             Client's paddle position is updated in gameState; if client's sync is newer, ball/score
+    #                   state is updated; opponent's state is sent back to client; on disconnect, client is removed
+    #                   from connected_clients and game may be reset
+
     global gameState, connected_clients
     
     try:
@@ -125,10 +133,13 @@ def client_handler(client_socket: socket.socket, player_side: str) -> None:
                 reset_game_state()
         client_socket.close()
 
+
 def main() -> None:
-    """
-    Main server function to set up the socket and accept client connections.
-    """
+    # Author:           Ehsanullah Dehzad, Fatima Fayazi, David Salas
+    # Purpose:          Initialize the server socket, bind to IP/port, listen for connections, and spawn client handler threads
+    # Pre:              Port 5555 is available; gameState and connected_clients are initialized as globals
+    # Post:             Server listens on 127.0.0.1:5555; up to 2 clients can connect; each client gets a
+    #                   side assignment ("left" or "right") and a handler thread; additional connections are rejected
     # Server configuration
     server_ip = "127.0.0.1" # Localhost
     server_port = 5555      # Port to listen on
